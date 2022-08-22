@@ -1,0 +1,59 @@
+---
+
+- name: Config CiscoASA
+  hosts: CiscoASA
+  connection: network_cli
+  gather_facts: false
+  become: true
+  become_method: enable
+  vars:
+    ansible_user: 'INSERT ASA PRIVILEGED USERNAME'
+    ansible_password: 'INSERT ASA PRIVILEGED USER'S PASSWORD'
+    ansible_network_os: asa
+    cert_file: 'INSERT THE PATH TO YOUR PFX FILE'
+    cert_pass: 'INSERT THE PASSWORD TO DECRYPT THE PFX FILE'
+    interface_name: 'INSERT THE INTERFACE NAME HERE - USUALLY "OUTSIDE"'
+
+  tasks:
+
+    - name: Get Certificate
+      set_fact:
+        cert: >
+          {{ (lookup('file', cert_file) | b64encode | regex_replace('(.{1,64})', '\1|')).split('|') | list + [ 'quit' ] }}
+      tags: [ cert ]
+
+    - name: Remove the existing TrustPoints
+      asa_config:
+        commands:
+          - no crypto ca trustpoint SSL-Trustpoint-Ansible noconfirm
+          - no crypto ca trustpoint SSL-Trustpoint-Ansible-1 noconfirm
+      ignore_errors: yes
+
+    - name: Remove the existing key pair
+      asa_config:
+        commands:
+          - crypto key zeroize rsa label SSL-Trustpoint-Ansible noconfirm
+      ignore_errors: yes
+
+    - name: Create A TrustPoint
+      asa_config:
+        lines:
+          - crypto ca trustpoint SSL-Trustpoint-Ansible
+        after:
+          - enrollment terminal
+
+    - name: Import A New Certificate Into The TrustPoint
+      asa_config:
+        replace: block
+        parents: "crypto ca import SSL-Trustpoint-Ansible pkcs12 {{ cert_pass }} nointeractive"
+        lines: "{{ cert }}"
+      notify:
+        - Set SSL Trust-Point
+
+  handlers:
+
+    - name: Set SSL Trust-Point
+      asa_config:
+        save: true
+        lines:
+          - ssl trust-point SSL-Trustpoint-Ansible {{ interface_name }}
